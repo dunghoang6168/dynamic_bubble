@@ -77,8 +77,6 @@ class IslandOverlayService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.droidbubble.app.START_OVERLAY"
         const val ACTION_STOP = "com.droidbubble.app.STOP_OVERLAY"
-        const val CHANNEL_UPDATES_ID = "droidbubble_app_updates"
-        const val UPDATE_NOTIFICATION_ID = 2002
 
         private var serviceInstance: IslandOverlayService? = null
 
@@ -422,7 +420,6 @@ class IslandOverlayService : Service() {
 
         createNotificationChannel()
         initCameraTorch()
-        startAutoUpdateChecker()
 
         persistentTelemetryManager = PersistentWidgetTelemetryManager(this).apply { start(currentSettings) }
 
@@ -925,68 +922,6 @@ class IslandOverlayService : Service() {
         serviceScope.cancel()
     }
 
-
-    private fun startAutoUpdateChecker() {
-        serviceScope.launch(Dispatchers.IO) {
-            delay(15_000L)
-            while (isActive) {
-                try {
-                    val result = com.droidbubble.app.util.UpdateManager.checkGithubUpdates(applicationContext)
-                    if (result is com.droidbubble.app.util.UpdateCheckResult.UpdateAvailable) {
-                        showUpdateNotification(result.release.version)
-                    } else if (result is com.droidbubble.app.util.UpdateCheckResult.UpToDate) {
-                        cancelUpdateNotification()
-                    }
-                } catch (e: Exception) {
-                    Log.w("IslandOverlayService", "Auto-update check encountered error", e)
-                }
-                delay(2 * 60 * 60 * 1000L)
-            }
-        }
-    }
-
-    private fun showUpdateNotification(version: String) {
-        val notificationManager = getSystemService(NotificationManager::class.java) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_UPDATES_ID,
-                "App Updates",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Notifies when a new Droidbubble update is available"
-                setShowBadge(true)
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("EXTRA_SHOW_UPDATE", true)
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            UPDATE_NOTIFICATION_ID,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-        )
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_UPDATES_ID)
-            .setSmallIcon(R.drawable.ic_notification_island)
-            .setContentTitle("Update to $version")
-            .setContentText("Update to $version")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .setContentIntent(pendingIntent)
-            .build()
-
-        notificationManager.notify(UPDATE_NOTIFICATION_ID, notification)
-    }
-
-    private fun cancelUpdateNotification() {
-        val notificationManager = getSystemService(NotificationManager::class.java) ?: return
-        notificationManager.cancel(UPDATE_NOTIFICATION_ID)
-    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

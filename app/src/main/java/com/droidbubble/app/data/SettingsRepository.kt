@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -63,7 +64,9 @@ class SettingsRepository(private val context: Context) {
         val HIDDEN_STATUS_ICONS = stringSetPreferencesKey("hidden_status_icons")
     }
 
-    val settingsFlow: Flow<IslandSettings> = context.dataStore.data.map { preferences ->
+    val settingsFlow: Flow<IslandSettings> = context.dataStore.data.map(::toSettings)
+
+    private fun toSettings(preferences: Preferences): IslandSettings {
         val resolvedSpeed = preferences[PreferencesKeys.ANIMATION_SPEED_MULTIPLIER] ?: run {
             when (preferences[PreferencesKeys.LEGACY_ANIMATION_SPEED]) {
                 "FAST" -> 1.5f
@@ -72,7 +75,7 @@ class SettingsRepository(private val context: Context) {
             }
         }
 
-        IslandSettings(
+        return IslandSettings(
             isEnabled = preferences[PreferencesKeys.IS_ENABLED] ?: true,
             widthDp = preferences[PreferencesKeys.WIDTH_DP] ?: 180,
             heightDp = preferences[PreferencesKeys.HEIGHT_DP] ?: 36,
@@ -125,63 +128,7 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun updateSettings(update: (IslandSettings) -> IslandSettings) {
         context.dataStore.edit { preferences ->
-            val resolvedSpeed = preferences[PreferencesKeys.ANIMATION_SPEED_MULTIPLIER] ?: run {
-                when (preferences[PreferencesKeys.LEGACY_ANIMATION_SPEED]) {
-                    "FAST" -> 1.5f
-                    "SLOW" -> 0.7f
-                    else -> 0.7f
-                }
-            }
-
-            val current = IslandSettings(
-                isEnabled = preferences[PreferencesKeys.IS_ENABLED] ?: true,
-                widthDp = preferences[PreferencesKeys.WIDTH_DP] ?: 180,
-                heightDp = preferences[PreferencesKeys.HEIGHT_DP] ?: 36,
-                cornerRadiusDp = preferences[PreferencesKeys.CORNER_RADIUS_DP] ?: 22,
-                topOffsetDp = preferences[PreferencesKeys.TOP_OFFSET_DP] ?: 12,
-                horizontalOffsetDp = preferences[PreferencesKeys.HORIZONTAL_OFFSET_DP] ?: 0,
-                showOutline = preferences[PreferencesKeys.SHOW_OUTLINE] ?: true,
-                outlineColorArgb = preferences[PreferencesKeys.OUTLINE_COLOR_ARGB] ?: 0x33FFFFFF,
-                outlineThicknessDp = preferences[PreferencesKeys.OUTLINE_THICKNESS_DP] ?: 1.5f,
-                expandedScale = preferences[PreferencesKeys.EXPANDED_SCALE] ?: 1.1f,
-                hapticsEnabled = preferences[PreferencesKeys.HAPTICS_ENABLED] ?: true,
-                showMedia = preferences[PreferencesKeys.SHOW_MEDIA] ?: true,
-                showNotifications = preferences[PreferencesKeys.SHOW_NOTIFICATIONS] ?: false,
-                showLiveProgress = preferences[PreferencesKeys.SHOW_LIVE_PROGRESS] ?: true,
-                showScreenRecording = preferences[PreferencesKeys.SHOW_SCREEN_RECORDING] ?: true,
-            showFlashlight = preferences[PreferencesKeys.SHOW_FLASHLIGHT] ?: true,
-                showBluetooth = preferences[PreferencesKeys.SHOW_BLUETOOTH] ?: true,
-                showCharging = preferences[PreferencesKeys.SHOW_CHARGING] ?: true,
-                showRingerMode = preferences[PreferencesKeys.SHOW_RINGER_MODE] ?: true,
-                showInLandscape = preferences[PreferencesKeys.SHOW_IN_LANDSCAPE] ?: false,
-                animationSpeed = resolvedSpeed,
-                blockedPackages = preferences[PreferencesKeys.BLOCKED_PACKAGES] ?: emptySet(),
-                restartOnBoot = preferences[PreferencesKeys.RESTART_ON_BOOT] ?: true,
-                bubbleEffectEnabled = preferences[PreferencesKeys.BUBBLE_EFFECT_ENABLED] ?: true,
-                dismissMediaOnPause = preferences[PreferencesKeys.DISMISS_MEDIA_ON_PAUSE] ?: false,
-                alwaysShowPill = preferences[PreferencesKeys.ALWAYS_SHOW_PILL] ?: false,
-                showFps = preferences[PreferencesKeys.SHOW_FPS] ?: false,
-                showWeather = preferences[PreferencesKeys.SHOW_WEATHER] ?: false,
-                showNetworkSpeed = preferences[PreferencesKeys.SHOW_NETWORK_SPEED] ?: false,
-                autoDismissNotifications = preferences[PreferencesKeys.AUTO_DISMISS_NOTIFICATIONS] ?: false,
-            blurredAlbumArtBackground = preferences[PreferencesKeys.BLURRED_ALBUM_ART_BACKGROUND] ?: false,
-            expandDamping = preferences[PreferencesKeys.EXPAND_DAMPING] ?: 0.74f,
-            expandStiffness = preferences[PreferencesKeys.EXPAND_STIFFNESS] ?: 380f,
-            appearDamping = preferences[PreferencesKeys.APPEAR_DAMPING] ?: 0.6f,
-            appearStiffness = preferences[PreferencesKeys.APPEAR_STIFFNESS] ?: 280f,
-            splitDamping = preferences[PreferencesKeys.SPLIT_DAMPING] ?: 0.63f,
-            splitStiffness = preferences[PreferencesKeys.SPLIT_STIFFNESS] ?: 320f,
-                featurePriorities = preferences[PreferencesKeys.FEATURE_PRIORITIES]
-                    ?.split(",")
-                    ?.map { it.trim() }
-                    ?.filter { it.isNotBlank() }
-                    ?.let { list ->
-                        val set = list.toSet()
-                        list + DEFAULT_FEATURE_PRIORITIES.filter { it !in set }
-                    } ?: DEFAULT_FEATURE_PRIORITIES,
-                hideStatusIcons = preferences[PreferencesKeys.HIDE_STATUS_ICONS] ?: false,
-                hiddenStatusIcons = preferences[PreferencesKeys.HIDDEN_STATUS_ICONS] ?: DEFAULT_HIDDEN_STATUS_ICONS
-            )
+            val current = toSettings(preferences)
 
             val newSettings = update(current)
 

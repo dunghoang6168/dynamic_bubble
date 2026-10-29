@@ -11,7 +11,6 @@ import android.view.Choreographer
 import android.view.WindowManager
 import com.droidbubble.app.island.IslandStateManager
 import com.droidbubble.app.model.FpsInfo
-import com.droidbubble.app.model.HourlyWeather
 import com.droidbubble.app.model.IslandSettings
 import com.droidbubble.app.model.NetworkSpeedInfo
 import com.droidbubble.app.model.WeatherInfo
@@ -178,7 +177,7 @@ class PersistentWidgetTelemetryManager(private val context: Context) {
 
                     val networkLabel = when {
                         isWifi -> "Wi-Fi"
-                        isCellular -> "Cellular 5G"
+                        isCellular -> "Cellular"
                         else -> "Network"
                     }
 
@@ -189,7 +188,6 @@ class PersistentWidgetTelemetryManager(private val context: Context) {
                         uploadBytesPerSec = deltaTx,
                         isWifi = isWifi,
                         networkLabel = networkLabel,
-                        pingMs = (14..26).random(),
                         sessionTotalMb = totalSessionBytes / (1024 * 1024)
                     )
 
@@ -254,14 +252,6 @@ class PersistentWidgetTelemetryManager(private val context: Context) {
 
                 val condition = mapWeatherCodeToCondition(weatherCode)
 
-                val hourly = listOf(
-                    HourlyWeather("Now", tempC, condition),
-                    HourlyWeather("+1h", tempC + 1, condition),
-                    HourlyWeather("+2h", highC, condition),
-                    HourlyWeather("+3h", tempC, condition),
-                    HourlyWeather("+4h", lowC + 2, "Clear")
-                )
-
                 val weatherInfo = WeatherInfo(
                     temperatureC = tempC,
                     condition = condition,
@@ -269,38 +259,15 @@ class PersistentWidgetTelemetryManager(private val context: Context) {
                     lowC = lowC,
                     humidityPct = humidity,
                     windKmh = windKmh,
-                    uvIndex = 3,
-                    cityName = defaultCity,
-                    hourlyForecast = hourly
+                    cityName = defaultCity
                 )
 
                 withContext(Dispatchers.Main) {
                     IslandStateManager.updateWeather(weatherInfo)
                 }
-            } else {
-                useFallbackWeather()
             }
         } catch (_: Exception) {
-            useFallbackWeather()
-        }
-    }
-
-    private suspend fun useFallbackWeather() {
-        val tz = TimeZone.getDefault().id
-        val (_, _, defaultCity) = approximateCoordsForTimeZone(tz)
-        withContext(Dispatchers.Main) {
-            IslandStateManager.updateWeather(
-                WeatherInfo(
-                    temperatureC = 22,
-                    condition = "Partly Cloudy",
-                    highC = 25,
-                    lowC = 16,
-                    humidityPct = 52,
-                    windKmh = 14,
-                    uvIndex = 3,
-                    cityName = defaultCity
-                )
-            )
+            // Keep the last real reading instead of showing made-up weather
         }
     }
 

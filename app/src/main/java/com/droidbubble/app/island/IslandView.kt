@@ -101,7 +101,6 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.ArrowUpward
 import com.droidbubble.app.model.FpsInfo
-import com.droidbubble.app.model.HourlyWeather
 import com.droidbubble.app.model.WeatherInfo
 import com.droidbubble.app.model.NetworkSpeedInfo
 import com.droidbubble.app.island.IslandStateManager.RingerMode
@@ -4276,46 +4275,6 @@ fun ExpandedWeatherView(
             }
         }
 
-        // Center section: Minimal 5-hour micro forecast strip
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF1C1C1E))
-                .padding(vertical = 7.dp, horizontal = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val forecast = if (weatherInfo.hourlyForecast.isNotEmpty()) {
-                weatherInfo.hourlyForecast.take(5)
-            } else {
-                listOf(
-                    HourlyWeather("Now", weatherInfo.temperatureC, weatherInfo.condition),
-                    HourlyWeather("+1h", weatherInfo.temperatureC, weatherInfo.condition),
-                    HourlyWeather("+2h", weatherInfo.temperatureC, weatherInfo.condition),
-                    HourlyWeather("+3h", weatherInfo.temperatureC, weatherInfo.condition),
-                    HourlyWeather("+4h", weatherInfo.temperatureC, weatherInfo.condition)
-                )
-            }
-            forecast.forEach { hour ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = hour.timeLabel,
-                        color = Color(0xFFA1A1AA),
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        text = "${hour.tempC}°",
-                        color = Color.White,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
-
         // Bottom section: Clean inline stats: Humidity, Wind, UV
         Row(
             modifier = Modifier
@@ -4337,17 +4296,6 @@ fun ExpandedWeatherView(
             )
             Text(
                 text = "Wind: ${weatherInfo.windKmh} km/h",
-                color = Color(0xFFA1A1AA),
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "•",
-                color = Color(0xFF3A3A3C),
-                fontSize = 11.sp
-            )
-            Text(
-                text = "UV Index: ${weatherInfo.uvIndex}",
                 color = Color(0xFFA1A1AA),
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.Medium
@@ -4395,13 +4343,6 @@ fun ExpandedNetworkSpeedView(
                     color = Color.White,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-                Text(
-                    text = "${networkSpeedInfo.pingMs} ms Latency",
-                    color = Color(0xFFA1A1AA),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
                     maxLines = 1
                 )
             }

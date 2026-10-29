@@ -201,8 +201,6 @@ fun MainScreen(
     val pendingPermissions by viewModel.pendingPermissions.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
     val isLoadingApps by viewModel.isLoadingApps.collectAsState()
-    val updateState by viewModel.updateState.collectAsState()
-    val showUpdateSheet by viewModel.showUpdateSheet.collectAsState()
 
     var showAppFilterSheet by remember { mutableStateOf(false) }
     var appFilterQuery by remember { mutableStateOf("") }
@@ -231,7 +229,6 @@ fun MainScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.checkPermissions(context)
-                viewModel.refreshUpdateStateOnResume(context)
                 if (settings.isEnabled && PermissionHelper.isOverlayGranted(context)) {
                     IslandOverlayService.start(context)
                 }
@@ -422,110 +419,6 @@ fun MainScreen(
                                     viewModel.toggleEnabled(context, enabled)
                                 }
                             )
-                        }
-                    )
-                }
-            }
-
-            // UPDATE BUTTON: Shaped like a list component in bright accent color
-            item {
-                val isDownloading = updateState is MainScreenViewModel.UpdateState.Downloading
-                val isChecking = updateState is MainScreenViewModel.UpdateState.Checking
-                val isAvailable = updateState is MainScreenViewModel.UpdateState.Available
-
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(28.dp))
-                        .clickable(enabled = !isDownloading && !isChecking) {
-                            if (isAvailable) {
-                                viewModel.openUpdateSheet()
-                            } else {
-                                viewModel.checkForUpdates(context)
-                            }
-                        },
-                    shape = RoundedCornerShape(28.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    shadowElevation = 2.dp
-                ) {
-                    ListItem(
-                        colors = ListItemDefaults.colors(
-                            containerColor = Color.Transparent,
-                            headlineColor = MaterialTheme.colorScheme.onPrimary,
-                            leadingIconColor = MaterialTheme.colorScheme.onPrimary,
-                            trailingIconColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        headlineContent = {
-                            Text(
-                                text = when (updateState) {
-                                    is MainScreenViewModel.UpdateState.Checking -> "Checking for updates..."
-                                    is MainScreenViewModel.UpdateState.UpToDate -> "Up to date"
-                                    is MainScreenViewModel.UpdateState.Available -> {
-                                        val rel = (updateState as MainScreenViewModel.UpdateState.Available).release
-                                        "Update available (${rel.version})"
-                                    }
-                                    is MainScreenViewModel.UpdateState.Downloading -> {
-                                        val p = ((updateState as MainScreenViewModel.UpdateState.Downloading).progress * 100).roundToInt()
-                                        "Downloading update ($p%)..."
-                                    }
-                                    is MainScreenViewModel.UpdateState.Error -> "Check for Updates"
-                                    else -> "Check for Updates"
-                                },
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
-                            )
-                        },
-                        leadingContent = {
-                            when (updateState) {
-                                is MainScreenViewModel.UpdateState.Checking -> {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(24.dp),
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        strokeWidth = 2.5.dp
-                                    )
-                                }
-                                is MainScreenViewModel.UpdateState.UpToDate -> {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Up to date",
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                is MainScreenViewModel.UpdateState.Available -> {
-                                    Icon(
-                                        imageVector = Icons.Default.SystemUpdate,
-                                        contentDescription = "Update Available",
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                else -> {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Check for Updates",
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                            }
-                        },
-                        trailingContent = {
-                            if (updateState is MainScreenViewModel.UpdateState.Available) {
-                                val rel = (updateState as MainScreenViewModel.UpdateState.Available).release
-                                if (rel.isBeta) {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.22f)
-                                    ) {
-                                        Text(
-                                            text = "BETA",
-                                            color = MaterialTheme.colorScheme.onPrimary,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
                         }
                     )
                 }
@@ -1051,151 +944,6 @@ fun MainScreen(
         }
     }
 
-    // Update Available Pop-up Shelf / Dialog
-    if (showUpdateSheet) {
-        val currentUpdate = (updateState as? MainScreenViewModel.UpdateState.Available)?.release
-            ?: (updateState as? MainScreenViewModel.UpdateState.Downloading)?.release
-        val downloadingProgress = (updateState as? MainScreenViewModel.UpdateState.Downloading)?.progress
-
-        if (currentUpdate != null) {
-            ModalBottomSheet(
-                onDismissRequest = { viewModel.dismissUpdateSheet() },
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "Version ${currentUpdate.version}",
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                if (currentUpdate.isBeta) {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = MaterialTheme.colorScheme.tertiaryContainer
-                                    ) {
-                                        Text(
-                                            text = "BETA",
-                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
-                            Text(
-                                text = currentUpdate.name.takeIf { it != currentUpdate.version && it != currentUpdate.tagName } ?: "New GitHub Release",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    if (currentUpdate.changelog.isNotBlank()) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = "What's New",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = currentUpdate.changelog,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-
-                    if (downloadingProgress != null) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Downloading APK...", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("${(downloadingProgress * 100).roundToInt()}%", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                            LinearProgressIndicator(
-                                progress = { downloadingProgress },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { viewModel.dismissUpdateSheet() },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("Later")
-                        }
-
-                        Button(
-                            onClick = {
-                                viewModel.downloadAndInstallUpdate(context, currentUpdate)
-                            },
-                            enabled = downloadingProgress == null,
-                            modifier = Modifier.weight(1.5f),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            if (downloadingProgress != null) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Downloading...")
-                            } else {
-                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Install Update")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Feedback Bottom Sheet Dialog
     if (showFeedbackSheet) {
         ModalBottomSheet(
@@ -1368,7 +1116,7 @@ fun MainScreen(
                                 appendLine()
                                 appendLine("----------------------------------------")
                                 appendLine("Device & App Info:")
-                                appendLine("Droidbubble Version: ${com.droidbubble.app.util.UpdateManager.getCurrentVersion(context)} (${context.packageName})")
+                                appendLine("Droidbubble Version: ${context.packageManager.getPackageInfo(context.packageName, 0).versionName} (${context.packageName})")
                                 appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
                                 appendLine("Android Version: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
                                 appendLine("Island Enabled: ${settings.isEnabled}")

@@ -41,9 +41,6 @@ class MainActivity : ComponentActivity() {
         if (PermissionHelper.isOverlayGranted(this)) {
             IslandOverlayService.start(this)
         }
-        if (intent.getBooleanExtra("EXTRA_SHOW_UPDATE", false)) {
-            viewModel.checkForUpdates(this)
-        }
 
         setContent {
             DroidbubbleTheme {
@@ -61,9 +58,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("EXTRA_SHOW_UPDATE", false)) {
-            viewModel.checkForUpdates(this)
-        }
     }
 
     override fun onResume() {

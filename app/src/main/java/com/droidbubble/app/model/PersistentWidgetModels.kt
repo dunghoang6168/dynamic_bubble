@@ -7,12 +7,6 @@ data class FpsInfo(
     val isSmooth: Boolean = true
 )
 
-data class HourlyWeather(
-    val timeLabel: String,
-    val tempC: Int,
-    val condition: String
-)
-
 data class WeatherInfo(
     val temperatureC: Int = 22,
     val condition: String = "Partly Cloudy",
@@ -20,15 +14,7 @@ data class WeatherInfo(
     val lowC: Int = 16,
     val humidityPct: Int = 54,
     val windKmh: Int = 14,
-    val uvIndex: Int = 3,
-    val cityName: String = "Local Weather",
-    val hourlyForecast: List<HourlyWeather> = listOf(
-        HourlyWeather("Now", 22, "Partly Cloudy"),
-        HourlyWeather("+1h", 23, "Sunny"),
-        HourlyWeather("+2h", 24, "Sunny"),
-        HourlyWeather("+3h", 23, "Partly Cloudy"),
-        HourlyWeather("+4h", 20, "Clear")
-    )
+    val cityName: String = "Local Weather"
 )
 
 data class NetworkSpeedInfo(
@@ -38,6 +24,5 @@ data class NetworkSpeedInfo(
     val uploadBytesPerSec: Long = 0L,
     val isWifi: Boolean = true,
     val networkLabel: String = "Wi-Fi",
-    val pingMs: Int = 18,
     val sessionTotalMb: Long = 0L
 )
