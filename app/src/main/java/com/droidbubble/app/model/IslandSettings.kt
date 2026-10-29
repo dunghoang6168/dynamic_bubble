@@ -63,5 +63,7 @@ data class IslandSettings(
     val splitStiffness: Float = 320f,
     val featurePriorities: List<String> = DEFAULT_FEATURE_PRIORITIES,
     val hideStatusIcons: Boolean = false,
+    val popupWidthPercent: Int = 65,
+    val replaceSystemPopups: Boolean = true,
     val hiddenStatusIcons: Set<String> = DEFAULT_HIDDEN_STATUS_ICONS
 )

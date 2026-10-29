@@ -88,7 +88,7 @@ class MainScreenViewModel(private val repository: SettingsRepository) : ViewMode
                         icon = icon,
                         isBlocked = currentBlocked.contains(pkg)
                     )
-                }.sortedBy { it.appName.lowercase() }
+                }.distinctBy { it.packageName }.sortedBy { it.appName.lowercase() }
             }
             _installedApps.value = apps
             _isLoadingApps.value = false

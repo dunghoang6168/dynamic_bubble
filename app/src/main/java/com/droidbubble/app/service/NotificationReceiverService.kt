@@ -1,6 +1,7 @@
 package com.droidbubble.app.service
 
 import android.app.ActivityOptions
+import android.app.KeyguardManager
 import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
@@ -21,6 +22,7 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import com.droidbubble.app.data.SettingsRepository
 import com.droidbubble.app.island.IslandStateManager
 import com.droidbubble.app.model.IslandSettings
@@ -35,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -48,6 +51,8 @@ class NotificationReceiverService : NotificationListenerService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var settingsRepository: SettingsRepository
     private var currentSettings = IslandSettings()
+    // True while notifications already in the shade are read in on connect, so they fill the stack without popping up
+    private var seeding = false
 
     private var mediaSessionManager: MediaSessionManager? = null
     private var activeMediaController: MediaController? = null
@@ -181,8 +186,8 @@ class NotificationReceiverService : NotificationListenerService() {
         }
 
         IslandStateManager.onSendReply = { key, replyText ->
-            val notif = IslandStateManager.activeNotification.value
-            if (notif != null && notif.key == key) {
+            val notif = IslandStateManager.findNotification(key)
+            if (notif != null) {
                 val replyAction = notif.actions.firstOrNull { it.isReply }
                 if (replyAction?.actionIntent != null && replyAction.remoteInputKey != null) {
                     val intent = Intent()
@@ -219,6 +224,13 @@ class NotificationReceiverService : NotificationListenerService() {
             updateActiveMediaController(initialControllers)
         } catch (e: Exception) {
             Log.e("NotificationReceiver", "Error registering media session listener", e)
+        }
+        serviceScope.launch {
+            currentSettings = settingsRepository.settingsFlow.first()
+            val existing = runCatching { activeNotifications }.getOrNull() ?: return@launch
+            seeding = true
+            existing.sortedBy { it.postTime }.forEach { runCatching { onNotificationPosted(it) } }
+            seeding = false
         }
     }
 
@@ -725,10 +737,17 @@ class NotificationReceiverService : NotificationListenerService() {
 
         val packageName = sbn.packageName
         if (packageName == this.packageName) return // Ignore self
-        if (currentSettings.blockedPackages.contains(packageName)) return
 
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
+
+        // "android.callType" is Notification.EXTRA_CALL_TYPE (CallStyle, API 31): 1 = incoming, 2 = ongoing
+        val callType = extras.getInt("android.callType", 0)
+        val isCallNotification = notification.category == Notification.CATEGORY_CALL
+        val isIncomingCall = isCallNotification && if (callType != 0) callType == 1 else notification.fullScreenIntent != null
+        // While the island stands in for the system pop-ups, incoming calls reach it even from filtered apps
+        val callBypassesFilter = isIncomingCall && currentSettings.replaceSystemPopups
+        if (currentSettings.blockedPackages.contains(packageName) && !callBypassesFilter) return
 
         // 0. If a "screen recording saved" notification arrives, immediately shut down recording state
         if (isScreenRecordingSavedNotification(sbn, notification)) {
@@ -790,14 +809,36 @@ class NotificationReceiverService : NotificationListenerService() {
             if (!currentSettings.showNotifications) return
         }
 
-        // Skip ongoing notifications UNLESS they report live progress (e.g. downloads, navigation)
-        if (isOngoing && !hasProgress) return
+        // An answered, declined or missed call drops its ringing card
+        if (isCallNotification && !isIncomingCall) {
+            IslandStateManager.removeNotification(sbn.key)
+            return
+        }
 
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+        // Skip ongoing notifications UNLESS they report live progress (e.g. downloads, navigation) or ring
+        if (isOngoing && !hasProgress && !isIncomingCall) return
+
+        // Group summaries ("7 new messages from 3 chats") repeat their children, which are shown one per chat
+        if (!hasProgress && (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+
+        // Messaging apps post one notification per chat; read its conversation and latest message
+        val messagingStyle = if (hasProgress) null else runCatching {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
+        }.getOrNull()
+        val lastMessage = messagingStyle?.messages?.lastOrNull()
+
+        val title = messagingStyle?.conversationTitle?.toString()?.takeIf { it.isNotBlank() }
+            ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()
-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        val text = lastMessage?.text?.toString()?.takeIf { it.isNotBlank() }
+            ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
+        // Named conversations (groups) show who wrote the latest message; 1:1 chats are titled by that person already
+        val sender = if (messagingStyle != null && (messagingStyle.isGroupConversation || messagingStyle.conversationTitle != null)) {
+            (lastMessage?.person ?: messagingStyle.user).name?.toString()?.takeIf { it.isNotBlank() && it != title }
+        } else null
+        val image = lastMessage?.takeIf { it.dataMimeType?.startsWith("image/") == true }?.dataUri?.let(::loadMessageImage)
 
         if (title.isNullOrBlank() && text.isNullOrBlank()) return
 
@@ -809,7 +850,10 @@ class NotificationReceiverService : NotificationListenerService() {
             packageName
         }
 
-        val iconBitmap = extractNotificationBitmap(notification, packageName)
+        // Chat avatar: the notification's large icon, else the latest sender's picture
+        val iconBitmap = notification.getLargeIcon()?.let { runCatching { it.loadDrawable(this) }.getOrNull() }?.let(::drawableToBitmap)
+            ?: lastMessage?.person?.icon?.let { runCatching { it.loadDrawable(this) }.getOrNull() }?.let(::drawableToBitmap)
+            ?: extractNotificationBitmap(notification, packageName)
 
         val actions = mutableListOf<NotificationAction>()
         notification.actions?.forEach { action ->
@@ -835,19 +879,29 @@ class NotificationReceiverService : NotificationListenerService() {
             title = title ?: appName,
             text = text ?: "",
             iconBitmap = iconBitmap,
+            appIcon = getAppIconBitmap(packageName),
+            sender = sender,
+            image = image,
             contentIntent = notification.contentIntent,
             actions = actions.take(3),
             timestamp = sbn.postTime,
             progress = progress,
             maxProgress = maxProgress,
             isIndeterminate = isIndeterminate || (isNavigation && maxProgress <= 0),
-            isOngoing = isOngoing
+            isOngoing = isOngoing,
+            isCall = isIncomingCall
         )
 
         if (hasProgress) {
             IslandStateManager.updateProgress(notifInfo)
+        } else if (seeding && !isIncomingCall) {
+            IslandStateManager.addToStack(notifInfo)
+        } else if (!isIncomingCall && getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
+            // No pop-up over the lock screen; the pill just shows it arrived
+            IslandStateManager.updateNotification(notifInfo, popUp = false)
         } else {
-            IslandStateManager.updateNotification(notifInfo)
+            val alertOnce = (notification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
+            IslandStateManager.updateNotification(notifInfo, silentUpdate = alertOnce)
         }
     }
 
@@ -883,6 +937,17 @@ class NotificationReceiverService : NotificationListenerService() {
         }
         return getAppIconBitmap(packageName)
     }
+
+    // ponytail: decoded on the listener's main thread; move to a background dispatcher if big photos stutter
+    private fun loadMessageImage(uri: Uri): Bitmap? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
+        contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        }
+    }.getOrNull()
 
     private val appIconCache = android.util.LruCache<String, Bitmap>(30)
 

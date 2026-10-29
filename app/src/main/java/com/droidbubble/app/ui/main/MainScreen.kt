@@ -183,6 +183,7 @@ enum class MainScreenPage {
     MAIN,
     DIMENSIONS,
     APPEARANCE,
+    NOTIFICATIONS,
     ACCESSIBILITY
 }
 
@@ -202,11 +203,9 @@ fun MainScreen(
     val installedApps by viewModel.installedApps.collectAsState()
     val isLoadingApps by viewModel.isLoadingApps.collectAsState()
 
-    var showAppFilterSheet by remember { mutableStateOf(false) }
-    var appFilterQuery by remember { mutableStateOf("") }
-
     var showDimensionsPage by remember { mutableStateOf(false) }
     var showAppearancePage by remember { mutableStateOf(false) }
+    var showNotificationsPage by remember { mutableStateOf(false) }
     var showAccessibilityPage by remember { mutableStateOf(false) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
     var feedbackType by remember { mutableStateOf(FeedbackType.BUG) }
@@ -243,6 +242,7 @@ fun MainScreen(
     val currentNavPage = when {
         showDimensionsPage -> MainScreenPage.DIMENSIONS
         showAppearancePage -> MainScreenPage.APPEARANCE
+        showNotificationsPage -> MainScreenPage.NOTIFICATIONS
         showAccessibilityPage -> MainScreenPage.ACCESSIBILITY
         else -> MainScreenPage.MAIN
     }
@@ -290,6 +290,18 @@ fun MainScreen(
                     settings = settings,
                     onUpdateSettings = { viewModel.updateSettings(it) },
                     onBack = { showAppearancePage = false },
+                    modifier = modifier
+                )
+            }
+            MainScreenPage.NOTIFICATIONS -> {
+                AppNotificationsPage(
+                    settings = settings,
+                    onUpdateSettings = { viewModel.updateSettings(it) },
+                    apps = installedApps,
+                    isLoadingApps = isLoadingApps,
+                    onLoadApps = { viewModel.loadInstalledApps(context) },
+                    onToggleApp = { viewModel.toggleAppBlocked(it) },
+                    onBack = { showNotificationsPage = false },
                     modifier = modifier
                 )
             }
@@ -461,6 +473,25 @@ fun MainScreen(
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowForwardIos,
                                     contentDescription = "Open Appearance & Feedback",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+
+                    SettingsCardItem(position = GroupPosition.MIDDLE) {
+                        ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier.clickable { showNotificationsPage = true },
+                            headlineContent = { Text("App Notifications", fontWeight = FontWeight.SemiBold) },
+                            leadingContent = {
+                                Icon(Icons.Default.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            },
+                            trailingContent = {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                    contentDescription = "Open App Notifications",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -862,87 +893,6 @@ fun MainScreen(
         }
     }
 }
-
-    // App Filter Modal Bottom Sheet
-    if (showAppFilterSheet) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        val coroutineScope = rememberCoroutineScope()
-
-        ModalBottomSheet(
-            onDismissRequest = { showAppFilterSheet = false },
-            sheetState = sheetState
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    text = "Per-App Notification Filter",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = appFilterQuery,
-                    onValueChange = { appFilterQuery = it },
-                    placeholder = { Text("Search installed apps...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    singleLine = true
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                val filteredApps = remember(installedApps, appFilterQuery) {
-                    if (appFilterQuery.isBlank()) installedApps
-                    else installedApps.filter {
-                        it.appName.contains(appFilterQuery, ignoreCase = true) ||
-                                it.packageName.contains(appFilterQuery, ignoreCase = true)
-                    }
-                }
-
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(400.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(filteredApps, key = { it.packageName }) { app ->
-                        ListItem(
-                            headlineContent = { Text(app.appName, fontWeight = FontWeight.Medium) },
-                            leadingContent = {
-                                if (app.icon != null) {
-                                    val bitmap = remember(app.icon) { app.icon.toBitmap(96, 96) }
-                                    Image(
-                                        bitmap = bitmap.asImageBitmap(),
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                    )
-                                } else {
-                                    Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(36.dp))
-                                }
-                            },
-                            trailingContent = {
-                                Switch(
-                                    checked = !app.isBlocked,
-                                    onCheckedChange = {
-                                        viewModel.toggleAppBlocked(app.packageName)
-                                    }
-                                )
-                            }
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-    }
 
     // Feedback Bottom Sheet Dialog
     if (showFeedbackSheet) {
@@ -1465,6 +1415,16 @@ fun DimensionsPage(
                             unit = "dp",
                             valueRange = -50f..50f,
                             onValueChange = { onUpdateSettings { s -> s.copy(horizontalOffsetDp = it.roundToInt()) } }
+                        )
+                    }
+
+                    SettingsCardItem(position = GroupPosition.MIDDLE) {
+                        SliderSettingItem(
+                            label = "Notification Popup Width",
+                            value = settings.popupWidthPercent.toFloat(),
+                            unit = "%",
+                            valueRange = 50f..100f,
+                            onValueChange = { onUpdateSettings { s -> s.copy(popupWidthPercent = it.roundToInt()) } }
                         )
                     }
 

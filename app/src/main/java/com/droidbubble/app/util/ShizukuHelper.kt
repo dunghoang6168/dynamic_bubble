@@ -23,6 +23,7 @@ object ShizukuHelper {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private const val ICON_BLACKLIST = "icon_blacklist"
+    private const val HEADS_UP_ENABLED = "heads_up_notifications_enabled"
     // Extra SystemUI slots behind one offered slot (Android 14+ moved the silent icon from "volume" to "mute")
     private val LINKED_SLOTS = mapOf("volume" to listOf("mute"))
     private val MANAGED_SLOTS = STATUS_ICON_SLOTS + LINKED_SLOTS.values.flatten()
@@ -132,6 +133,16 @@ object ShizukuHelper {
         return runCatching {
             Settings.Secure.putString(resolver, ICON_BLACKLIST, updated.joinToString(","))
         }.onFailure { Log.e(TAG, "Failed to write icon_blacklist", it) }.getOrDefault(false)
+    }
+
+    /**
+     * Turns Android's heads-up pop-ups on or off for every app (a single global switch; there is no per-app one).
+     */
+    fun setSystemHeadsUpEnabled(context: Context, enabled: Boolean): Boolean {
+        if (!hasWriteSecureSettings(context)) return false
+        return runCatching {
+            Settings.Global.putInt(context.contentResolver, HEADS_UP_ENABLED, if (enabled) 1 else 0)
+        }.onFailure { Log.e(TAG, "Failed to write $HEADS_UP_ENABLED", it) }.getOrDefault(false)
     }
 
     private fun runShellCommand(command: String): Boolean {

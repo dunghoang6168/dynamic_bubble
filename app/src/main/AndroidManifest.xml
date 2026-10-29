@@ -52,6 +52,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Invisible: asks to unlock before opening a notification tapped on the lock screen -->
+        <activity
+            android:name=".island.UnlockAndOpenActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Dynamic Island WindowManager Overlay Service -->
         <service
             android:name=".service.IslandOverlayService"

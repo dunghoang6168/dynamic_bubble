@@ -21,6 +21,7 @@ object IslandStateManager {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var popInJob: Job? = null
+    private const val MAX_STACK = 12
     private var chargingJob: Job? = null
 
     data class ChargingInfo(
@@ -55,6 +56,23 @@ object IslandStateManager {
 
     private val _activeNotification = MutableStateFlow<NotificationInfo?>(null)
     val activeNotification: StateFlow<NotificationInfo?> = _activeNotification.asStateFlow()
+
+    // Every notification the island currently holds, newest first (one per chat for messaging apps)
+    private val _notificationStack = MutableStateFlow<List<NotificationInfo>>(emptyList())
+    val notificationStack: StateFlow<List<NotificationInfo>> = _notificationStack.asStateFlow()
+
+    const val POP_IN_DURATION_MS = 4500L
+
+    fun findNotification(key: String): NotificationInfo? = _notificationStack.value.firstOrNull { it.key == key }
+
+    /** Adds a notification for the expanded card without making it the pill's notification. */
+    fun addToStack(notification: NotificationInfo) {
+        _notificationStack.value = (listOf(notification) + _notificationStack.value.filter { it.key != notification.key }).take(MAX_STACK)
+    }
+
+    // True while the lock screen is up and Android hides notification content there; the island shows only the app
+    private val _hideNotificationContent = MutableStateFlow(false)
+    val hideNotificationContent: StateFlow<Boolean> = _hideNotificationContent.asStateFlow()
 
     private val _activeProgress = MutableStateFlow<NotificationInfo?>(null)
     val activeProgress: StateFlow<NotificationInfo?> = _activeProgress.asStateFlow()
@@ -223,9 +241,15 @@ object IslandStateManager {
         }
     }
 
+    /** Screen off: until the next unlock, hide notification content if the lock screen hides it too. */
+    fun onScreenOff(hideContent: Boolean) {
+        _hideNotificationContent.value = hideContent
+    }
+
     fun triggerUnlockEvent() {
         android.util.Log.d("IslandStateManager", "triggerUnlockEvent() invoked: setting isUnlocked = true for 1500ms")
         unlockJob?.cancel()
+        _hideNotificationContent.value = false
         _isUnlocked.value = true
         unlockJob = scope.launch {
             delay(1500) // 1.5 seconds as requested
@@ -316,13 +340,21 @@ object IslandStateManager {
         }
     }
 
-    fun updateNotification(notification: NotificationInfo?) {
+    fun updateNotification(notification: NotificationInfo?, silentUpdate: Boolean = false, popUp: Boolean = true) {
         if (notification != null && notification.hasProgress) {
             updateProgress(notification)
             return
         }
+        // An alert-once update of a chat already on the island refreshes it without popping up again
+        val alreadyShown = notification != null && findNotification(notification.key) != null
+        if (notification != null) {
+            _notificationStack.value = (listOf(notification) + _notificationStack.value.filter { it.key != notification.key }).take(MAX_STACK)
+        } else {
+            _notificationStack.value = emptyList()
+        }
         autoDismissNotificationJob?.cancel()
         _activeNotification.value = notification
+        if (notification != null && silentUpdate && alreadyShown) return
         if (notification == null) {
             _isPopInActive.value = false
             if (_isExpanded.value && (_expandedPriority.value == IslandPriority.POP_NOTIFICATION || !isOccupied)) {
@@ -332,8 +364,10 @@ object IslandStateManager {
                     _expandedPriority.value = null
                 }
             }
+        } else if (notification.isCall) {
+            expand(IslandPriority.POP_NOTIFICATION)
         } else {
-            triggerPopIn()
+            if (popUp) triggerPopIn()
             if (autoDismissNotifications) {
                 val notifKey = notification.key
                 autoDismissNotificationJob = scope.launch {
@@ -361,18 +395,25 @@ object IslandStateManager {
 
     fun removeNotification(key: String) {
         var removed = false
-        if (_activeNotification.value?.key == key) {
+        val active = _activeNotification.value
+        _notificationStack.value = _notificationStack.value.filter { it.key != key }
+        if (active?.key == key) {
             autoDismissNotificationJob?.cancel()
-            _activeNotification.value = null
+            // Another chat of the same app takes over, so its expanded card stays open
+            _activeNotification.value = _notificationStack.value.firstOrNull { it.packageName == active.packageName }
             _isPopInActive.value = false
-            removed = true
+            removed = _activeNotification.value == null
         }
         if (_activeProgress.value?.key == key) {
             _activeProgress.value = null
             removed = true
         }
-        if (removed && _isExpanded.value && !isOccupied) {
-            collapse()
+        if (removed && _isExpanded.value) {
+            if (!isOccupied) {
+                collapse()
+            } else if (_expandedPriority.value == IslandPriority.POP_NOTIFICATION) {
+                _expandedPriority.value = null
+            }
         }
     }
 
@@ -380,18 +421,31 @@ object IslandStateManager {
         _isPopInActive.value = true
         popInJob?.cancel()
         popInJob = scope.launch {
-            delay(4500) // Bubble pop-in for 4.5 seconds then auto-shrink to compact
+            delay(POP_IN_DURATION_MS) // Popup stays out for 4.5 seconds then shrinks back into the pill
             _isPopInActive.value = false
         }
+    }
+
+    fun endPopIn() {
+        popInJob?.cancel()
+        _isPopInActive.value = false
+    }
+
+    /** Drops one app's notifications from the island only; they stay in the shade. */
+    fun dismissApp(packageName: String) {
+        _notificationStack.value = _notificationStack.value.filter { it.packageName != packageName }
     }
 
     fun dismissCurrentNotification(): Boolean {
         autoDismissNotificationJob?.cancel()
         val notif = _activeNotification.value ?: return false
         // Dismiss card only, without cancelling actual system notification
-        _activeNotification.value = null
+        _notificationStack.value = _notificationStack.value.filter { it.packageName != notif.packageName }
+        // With the cards open, the next app's notification moves up into the main card
+        val next = if (_isExpanded.value) _notificationStack.value.firstOrNull() else null
+        _activeNotification.value = next
         _isPopInActive.value = false
-        if (_isExpanded.value && (_expandedPriority.value == IslandPriority.POP_NOTIFICATION || !isOccupied)) {
+        if (next == null && _isExpanded.value && (_expandedPriority.value == IslandPriority.POP_NOTIFICATION || !isOccupied)) {
             if (!isOccupied) {
                 collapse()
             } else {
@@ -430,6 +484,7 @@ object IslandStateManager {
         }
         _expandedPriority.value = priority
         _isExpanded.value = true
+        endPopIn()
     }
 
     fun collapse() {

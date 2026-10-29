@@ -62,6 +62,11 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.lerp
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.key
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -379,7 +384,14 @@ fun IslandOverlayRoot(
     }
 
     val currentMedia = media
-    val currentNotif = notification
+    val hideNotificationContent by IslandStateManager.hideNotificationContent.collectAsState()
+    val currentNotif = if (hideNotificationContent) notification?.redacted() else notification
+    val notificationStack by IslandStateManager.notificationStack.collectAsState()
+    // Newest notification of each other app; each gets a card of its own under the main one
+    val otherAppNotifications = remember(notificationStack, currentNotif?.packageName, hideNotificationContent) {
+        notificationStack.filter { it.packageName != currentNotif?.packageName }.distinctBy { it.packageName }
+            .map { if (hideNotificationContent) it.redacted() else it }
+    }
     val currentProgress = progressNotification
     val mediaArt = currentMedia?.albumArt ?: currentMedia?.appIcon
     val mediaAccentColor = remember(mediaArt) { extractMediaAccentColor(mediaArt) }
@@ -793,9 +805,18 @@ fun IslandOverlayRoot(
         else -> 144.dp
     }
 
+    // The notification card grows with its chats; measured from its content once it has rendered
+    var notifContentHeight by remember { mutableStateOf(0.dp) }
+    val notifPadding = (16.dp * settings.expandedScale).coerceIn(10.dp, 22.dp)
+    val notifCardHeight = if (notifContentHeight > 0.dp) {
+        (notifContentHeight + notifPadding * 2).coerceIn(120.dp, (configuration.screenHeightDp - settings.topOffsetDp - 80).dp)
+    } else {
+        (notifBaseHeight * settings.expandedScale).coerceAtLeast(136.dp)
+    }
+
     val targetCard1Height = when {
         isExpanded && primaryPriority == IslandPriority.SCREEN_RECORDING -> (115.dp * settings.expandedScale).coerceAtLeast(100.dp)
-        isExpanded && primaryPriority == IslandPriority.POP_NOTIFICATION -> (notifBaseHeight * settings.expandedScale).coerceAtLeast(136.dp)
+        isExpanded && primaryPriority == IslandPriority.POP_NOTIFICATION -> notifCardHeight
         isExpanded && primaryPriority == IslandPriority.PROGRESS -> (182.dp * settings.expandedScale).coerceAtLeast(155.dp)
         isExpanded && primaryPriority == IslandPriority.FLASHLIGHT -> (205.dp * settings.expandedScale).coerceAtLeast(165.dp)
         isExpanded && primaryPriority == IslandPriority.FPS -> (185.dp * settings.expandedScale).coerceAtLeast(150.dp)
@@ -822,7 +843,9 @@ fun IslandOverlayRoot(
     }
 
     val showSecondaryCard = !isCharging && !isUnlock && !isBluetooth && !isRingerMode && activeCount >= 2 && secondaryPriority != null
-    val targetCard2Height = if (card2Expanded && showSecondaryCard) {
+    val targetCard2Height = if (card2Expanded && showSecondaryCard && secondaryPriority == IslandPriority.POP_NOTIFICATION) {
+        notifCardHeight
+    } else if (card2Expanded && showSecondaryCard) {
         val baseH = when (secondaryPriority) {
             IslandPriority.SCREEN_RECORDING -> 115.dp
             IslandPriority.POP_NOTIFICATION -> notifBaseHeight
@@ -893,7 +916,9 @@ fun IslandOverlayRoot(
         settings.topOffsetDp.dp // Docks right over the punch hole when minimised or charging/unlock/bluetooth/ringer
     }
 
-    val targetCardSpacing = if (isExpanded && showSecondaryCard) 10.dp else 0.dp
+    val notificationCardShown = isExpanded &&
+        (primaryPriority == IslandPriority.POP_NOTIFICATION || (showSecondaryCard && secondaryPriority == IslandPriority.POP_NOTIFICATION))
+    val targetCardSpacing = if (isExpanded && (showSecondaryCard || (notificationCardShown && otherAppNotifications.isNotEmpty()))) 10.dp else 0.dp
 
     val animatedCompactWidth by animateDpAsState(targetValue = targetCompactWidth, animationSpec = compactPillWidthAnimSpec, label = "compactWidth")
     val animatedCard1Width by animateDpAsState(targetValue = targetCard1Width, animationSpec = sizeAnimSpecDp, label = "card1Width")
@@ -1088,7 +1113,7 @@ fun IslandOverlayRoot(
                                                             if (abs(card1OffsetX) > threshold) {
                                                                 triggerHaptic()
                                                                 val dismissed = IslandStateManager.dismissCurrentNotification()
-                                                                if (dismissed && activeCount <= 1) {
+                                                                if (dismissed && activeCount <= 1 && IslandStateManager.activeNotification.value == null) {
                                                                     IslandStateManager.collapse()
                                                                 }
                                                             }
@@ -1243,6 +1268,7 @@ fun IslandOverlayRoot(
                                         weatherInfo = weatherInfo,
                                         networkSpeedInfo = networkSpeedInfo,
                                         scale = settings.expandedScale,
+                                        onNotificationContentHeight = { notifContentHeight = it },
                                         onCollapse = {
                                             triggerHaptic()
                                             IslandStateManager.collapse()
@@ -1430,10 +1456,52 @@ fun IslandOverlayRoot(
                                         weatherInfo = weatherInfo,
                                         networkSpeedInfo = networkSpeedInfo,
                                         scale = settings.expandedScale,
+                                        onNotificationContentHeight = { notifContentHeight = it },
                                         onCollapse = {
                                             triggerHaptic()
                                             IslandStateManager.collapse()
                                         }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // One card per other app with notifications, up to 3 cards in all (status strip not counted)
+                    if (notificationCardShown) {
+                        val freeSlots = 3 - (if (showSecondaryCard) 2 else 1)
+                        otherAppNotifications.take(freeSlots).forEach { other ->
+                            key(other.packageName) {
+                                var offsetX by remember { mutableFloatStateOf(0f) }
+                                Box(
+                                    modifier = Modifier
+                                        .offset { IntOffset(offsetX.roundToInt(), 0) }
+                                        .pointerInput(other.packageName) {
+                                            detectHorizontalDragGestures(
+                                                onDragEnd = {
+                                                    if (abs(offsetX) > 160f) {
+                                                        triggerHaptic()
+                                                        IslandStateManager.dismissApp(other.packageName)
+                                                    }
+                                                    offsetX = 0f
+                                                },
+                                                onDragCancel = { offsetX = 0f },
+                                                onHorizontalDrag = { _, dragAmount -> offsetX += dragAmount }
+                                            )
+                                        }
+                                        .width(animatedCard1Width)
+                                        .graphicsLayer { alpha = ((expandProgress - 0.30f) / 0.70f).coerceIn(0f, 1f) }
+                                        .clip(RoundedCornerShape(animatedCornerRadius))
+                                        .background(Color.Black)
+                                        .padding(horizontal = (20.dp * settings.expandedScale).coerceIn(14.dp, 24.dp), vertical = notifPadding)
+                                ) {
+                                    ExpandedNotificationView(
+                                        notification = other,
+                                        onCollapse = {
+                                            triggerHaptic()
+                                            IslandStateManager.collapse()
+                                        },
+                                        scale = settings.expandedScale
                                     )
                                 }
                             }
@@ -1990,15 +2058,72 @@ fun IslandOverlayRoot(
                         .graphicsLayer { alpha = effectiveParenthesisAlpha }
                 )
             }
+
+            // 4. Notification popup: blooms out of the pill for a new notification and shrinks back into it
+            val showPopup = isPopIn && isNotification && currentNotif != null && !isExpanded &&
+                    !isCharging && !isUnlock && !isBluetooth && !isRingerMode
+            val popupProgress by animateFloatAsState(
+                targetValue = if (showPopup) 1f else 0f,
+                animationSpec = spring(
+                    dampingRatio = settings.expandDamping,
+                    stiffness = settings.expandStiffness * speedSq
+                ),
+                label = "popupProgress"
+            )
+            // Keeps the content on screen while the popup shrinks after the notification is gone
+            var popupNotification by remember { mutableStateOf<NotificationInfo?>(null) }
+            if (showPopup) popupNotification = currentNotif
+            val shownPopup = popupNotification
+            if (popupProgress > 0.01f && shownPopup != null) {
+                val popupWidth = (screenWidth * (settings.popupWidthPercent / 100f)).coerceAtMost(screenWidth - 16.dp)
+                val popupShape = RoundedCornerShape(lerp(settings.cornerRadiusDp.dp, 24.dp, popupProgress.coerceIn(0f, 1f)))
+                Box(
+                    modifier = Modifier
+                        .width(lerp(settings.widthDp.dp, popupWidth, popupProgress))
+                        .height(lerp(settings.heightDp.dp, settings.heightDp.dp + NOTIFICATION_POPUP_BODY_HEIGHT, popupProgress))
+                        .graphicsLayer { alpha = (popupProgress * 4f).coerceIn(0f, 1f) }
+                        .clip(popupShape)
+                        .background(Color.Black)
+                        .then(
+                            if (settings.showOutline) {
+                                Modifier.border(settings.outlineThicknessDp.dp, primaryOutlineColor, popupShape)
+                            } else Modifier
+                        )
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures { _, dragAmount ->
+                                if (dragAmount < -12f) IslandStateManager.endPopIn()
+                            }
+                        }
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            triggerHaptic()
+                            IslandStateManager.expand(IslandPriority.POP_NOTIFICATION)
+                        }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = ((popupProgress - 0.55f) / 0.45f).coerceIn(0f, 1f) }
+                    ) {
+                        NotificationPopupContent(notification = shownPopup, headerHeight = settings.heightDp.dp)
+                    }
+                }
+            }
         }
     }
 }
+
+// Popup height below the pill-high first row: avatar, title, two lines of text and the timer bar
+val NOTIFICATION_POPUP_BODY_HEIGHT = 72.dp
 
 fun launchAppOrIntent(
     context: android.content.Context,
     packageName: String?,
     fallbackPendingIntent: PendingIntent? = null
 ): Boolean {
+    if (UnlockAndOpenActivity.openAfterUnlock(context, packageName, fallbackPendingIntent)) return true
     // 1. If it is an app, open it directly via its launcher intent with NEW_TASK
     if (!packageName.isNullOrBlank()) {
         try {
@@ -2561,6 +2686,7 @@ fun ExpandedCardContent(
     weatherInfo: WeatherInfo = WeatherInfo(),
     networkSpeedInfo: NetworkSpeedInfo = NetworkSpeedInfo(),
     scale: Float = 1.0f,
+    onNotificationContentHeight: (Dp) -> Unit = {},
     onCollapse: () -> Unit
 ) {
     when (priority) {
@@ -2568,7 +2694,7 @@ fun ExpandedCardContent(
             ExpandedRecordingView(recording, onCollapse, scale)
         }
         IslandPriority.POP_NOTIFICATION -> {
-            ExpandedNotificationView(notification, onCollapse, scale)
+            ExpandedNotificationView(notification, onCollapse, scale, onNotificationContentHeight)
         }
         IslandPriority.PROGRESS -> {
             ExpandedProgressView(notification, onCollapse, scale)
@@ -3168,18 +3294,93 @@ fun ExpandedMediaView(media: MediaInfo?, onCollapse: () -> Unit, scale: Float = 
 }
 
 @Composable
-fun ExpandedNotificationView(notification: NotificationInfo?, onCollapse: () -> Unit, scale: Float = 1.0f) {
+fun ExpandedNotificationView(
+    notification: NotificationInfo?,
+    onCollapse: () -> Unit,
+    scale: Float = 1.0f,
+    onContentHeight: (Dp) -> Unit = {}
+) {
+    val rawStack by IslandStateManager.notificationStack.collectAsState()
+    val hideContent by IslandStateManager.hideNotificationContent.collectAsState()
+    val stack = remember(rawStack, hideContent) { if (hideContent) rawStack.map { it.redacted() } else rawStack }
+    // Chats of the same app, newest first; the focused one shows its full message, picture and actions
+    val conversations = remember(stack, notification) {
+        stack.filter { it.packageName == notification?.packageName }.take(4).ifEmpty { listOfNotNull(notification) }
+    }
+    var focusedKey by remember { mutableStateOf(notification?.key) }
+    LaunchedEffect(conversations.firstOrNull()?.key) {
+        focusedKey = conversations.firstOrNull()?.key
+    }
+    val focused = conversations.firstOrNull { it.key == focusedKey } ?: conversations.firstOrNull()
+    val density = LocalDensity.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .wrapContentHeight(align = Alignment.Top, unbounded = true)
+            .onSizeChanged { onContentHeight(with(density) { it.height.toDp() }) },
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            focused?.appIcon?.let { icon ->
+                Image(
+                    bitmap = icon.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = focused?.appName ?: "",
+                color = Color(0xFFE5E5EA),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            if (conversations.size > 1) {
+                Text(
+                    text = " · ${conversations.size} chats",
+                    color = Color(0xFFA1A1AA),
+                    fontSize = 12.sp,
+                    maxLines = 1
+                )
+            }
+        }
+
+        conversations.forEach { item ->
+            key(item.key) {
+                if (item.key == focused?.key) {
+                    FocusedNotification(notification = item, onCollapse = onCollapse, scale = scale)
+                } else {
+                    ConversationRow(notification = item, onClick = { focusedKey = item.key })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FocusedNotification(notification: NotificationInfo, onCollapse: () -> Unit, scale: Float) {
     val context = LocalContext.current
     var isReplying by remember { mutableStateOf(false) }
     var replyText by remember { mutableStateOf("") }
 
     val replyAction = remember(notification) {
-        notification?.actions?.firstOrNull { it.isReply || it.title.contains("Reply", ignoreCase = true) }
+        notification.actions.firstOrNull { it.isReply || it.title.contains("Reply", ignoreCase = true) }
     }
 
     fun openNotification() {
         IslandStateManager.setKeyboardFocused(false)
-        val pendingIntent = notification?.contentIntent
+        if (UnlockAndOpenActivity.openAfterUnlock(context, notification.packageName, notification.contentIntent)) {
+            onCollapse()
+            return
+        }
+        val pendingIntent = notification.contentIntent
         var launched = false
         if (pendingIntent != null) {
             try {
@@ -3196,7 +3397,7 @@ fun ExpandedNotificationView(notification: NotificationInfo?, onCollapse: () -> 
                 Log.e("ExpandedNotification", "Failed to send contentIntent", e)
             }
         }
-        if (!launched && !notification?.packageName.isNullOrBlank()) {
+        if (!launched && notification.packageName.isNotBlank()) {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(notification.packageName)
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
@@ -3207,114 +3408,74 @@ fun ExpandedNotificationView(notification: NotificationInfo?, onCollapse: () -> 
     }
 
     fun sendReply(text: String) {
-        if (text.isBlank() || notification == null) return
+        if (text.isBlank()) return
         IslandStateManager.onSendReply?.invoke(notification.key, text.trim())
         IslandStateManager.setKeyboardFocused(false)
-        IslandStateManager.dismissCurrentNotification()
-        onCollapse()
+        IslandStateManager.removeNotification(notification.key)
     }
 
-    val iconSize = (40.dp * scale).coerceIn(32.dp, 48.dp)
-    val iconGap = (12.dp * scale).coerceIn(8.dp, 16.dp)
-    val titleSize = (17 * scale).coerceIn(14f, 19f).sp
-    val appNameSize = (13 * scale).coerceIn(11.5f, 15f).sp
+    val avatarSize = (40.dp * scale).coerceIn(32.dp, 48.dp)
+    val avatarGap = (12.dp * scale).coerceIn(8.dp, 16.dp)
+    val titleSize = (16 * scale).coerceIn(14f, 18f).sp
     val bodySize = (15 * scale).coerceIn(13f, 17f).sp
     val bodyLineHeight = (20 * scale).coerceIn(17f, 22f).sp
-    val bodyMaxLines = if (scale < 0.88f) 2 else 3
-    val buttonHeight = (38.dp * scale).coerceIn(32.dp, 44.dp)
+    val buttonHeight = (40.dp * scale).coerceIn(36.dp, 46.dp)
     val buttonFontSize = (13.5f * scale).coerceIn(12f, 15f).sp
 
     Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF151517))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Top section: Header + Body text
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // App icon (tap to open app)
-                Box(
-                    modifier = Modifier
-                        .size(iconSize)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF2C2C2E))
-                        .clickable {
-                            launchAppOrIntent(context, notification?.packageName, notification?.contentIntent)
-                            onCollapse()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (notification?.iconBitmap != null) {
-                        Image(
-                            bitmap = notification.iconBitmap.asImageBitmap(),
-                            contentDescription = "App Icon",
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Notifications,
-                            contentDescription = null,
-                            tint = Color(0xFFE5E5EA),
-                            modifier = Modifier.size((24.dp * scale).coerceIn(18.dp, 28.dp))
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(iconGap))
-
-                Column(modifier = Modifier.weight(1f)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { openNotification() },
+            verticalAlignment = Alignment.Top
+        ) {
+            NotificationAvatar(notification.iconBitmap, avatarSize)
+            Spacer(modifier = Modifier.width(avatarGap))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = notification?.title ?: "Notification",
+                        text = notification.title,
                         color = Color.White,
                         fontSize = titleSize,
                         fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
                     Text(
-                        text = notification?.appName ?: "",
+                        text = notificationTime(notification),
                         color = Color(0xFFA1A1AA),
-                        fontSize = appNameSize,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
+                        fontSize = 12.sp
+                    )
+                }
+                if (notification.text.isNotBlank()) {
+                    Text(
+                        text = notificationLine(notification),
+                        color = Color(0xFFF4F4F5),
+                        fontSize = bodySize,
+                        lineHeight = bodyLineHeight,
+                        maxLines = 6,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-
-                IconButton(
-                    onClick = {
-                        IslandStateManager.setKeyboardFocused(false)
-                        IslandStateManager.dismissCurrentNotification()
-                        onCollapse()
-                    },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Dismiss",
-                        tint = Color(0xFF8E8E93),
-                        modifier = Modifier.size(20.dp)
+                notification.image?.let { picture ->
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Image(
+                        bitmap = picture.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .heightIn(max = 160.dp)
+                            .clip(RoundedCornerShape(12.dp))
                     )
                 }
-            }
-
-            if (!notification?.text.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height((6.dp * scale).coerceIn(3.dp, 8.dp)))
-
-                Text(
-                    text = notification?.text ?: "",
-                    color = Color(0xFFF4F4F5),
-                    fontSize = bodySize,
-                    lineHeight = bodyLineHeight,
-                    fontWeight = FontWeight.Normal,
-                    maxLines = bodyMaxLines,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { openNotification() }
-                )
             }
         }
 
@@ -3426,7 +3587,7 @@ fun ExpandedNotificationView(notification: NotificationInfo?, onCollapse: () -> 
             // with inner corners facing adjacent buttons being squarish
             val actionItems = remember(notification, replyAction) {
                 val list = mutableListOf<NotificationActionItem>()
-                val notifActions = notification?.actions ?: emptyList()
+                val notifActions = notification.actions
                 notifActions.take(2).forEach { action ->
                     val isThisReply = action == replyAction || action.isReply || action.title.contains("Reply", ignoreCase = true)
                     list.add(
@@ -3438,9 +3599,9 @@ fun ExpandedNotificationView(notification: NotificationInfo?, onCollapse: () -> 
                                     isReplying = true
                                     IslandStateManager.setKeyboardFocused(true)
                                 } else {
-                                    runCatching { action.actionIntent?.send() }
-                                    IslandStateManager.dismissCurrentNotification()
-                                    onCollapse()
+                                    action.actionIntent?.let { runCatching { sendFromIsland(context, it) } }
+                                    // Next chat of this app gets the focus; the card closes after the last one
+                                    IslandStateManager.removeNotification(notification.key)
                                 }
                             }
                         )

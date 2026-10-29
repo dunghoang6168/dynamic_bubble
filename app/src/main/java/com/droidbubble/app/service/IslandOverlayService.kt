@@ -53,6 +53,7 @@ import com.droidbubble.app.R
 import com.droidbubble.app.data.SettingsRepository
 import com.droidbubble.app.island.IslandOverlayRoot
 import com.droidbubble.app.island.IslandStateManager
+import com.droidbubble.app.island.NOTIFICATION_POPUP_BODY_HEIGHT
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Handler
@@ -113,6 +114,8 @@ class IslandOverlayService : Service() {
     private var currentSettings = IslandSettings()
     // Status bar icons this service last hid via icon_blacklist
     private var appliedStatusIcons: Set<String> = emptySet()
+    // True while this service has Android's heads-up pop-ups turned off in favour of the island
+    private var systemPopupsReplaced = false
 
     private var cameraManager: CameraManager? = null
     private var torchCameraId: String? = null
@@ -236,10 +239,24 @@ class IslandOverlayService : Service() {
 
     private var lastRingerMode: Int? = null
 
+    /** Android's "hide sensitive content" on a secure lock screen, which the island follows like iOS Show Previews. */
+    private fun lockScreenHidesContent(): Boolean {
+        if (getSystemService(KeyguardManager::class.java)?.isDeviceSecure != true) return false
+        // Hidden Settings.Secure keys; if Android refuses the read, stay private
+        return runCatching {
+            Settings.Secure.getInt(contentResolver, "lock_screen_allow_private_notifications", 1) == 0 ||
+                Settings.Secure.getInt(contentResolver, "lock_screen_show_notifications", 1) == 0
+        }.getOrDefault(true)
+    }
+
     private val powerReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action ?: return
             Log.d("IslandOverlayService", "System broadcast received: $action")
+            if (action == Intent.ACTION_SCREEN_OFF) {
+                IslandStateManager.onScreenOff(lockScreenHidesContent())
+                return
+            }
             if (action == AudioManager.RINGER_MODE_CHANGED_ACTION || action == "android.media.INTERNAL_RINGER_MODE_CHANGED_ACTION") {
                 if (!currentSettings.showRingerMode) return
                 val mode = intent.getIntExtra(AudioManager.EXTRA_RINGER_MODE, -1)
@@ -444,6 +461,7 @@ class IslandOverlayService : Service() {
             addAction("android.os.action.CHARGING")
             addAction(Intent.ACTION_USER_PRESENT)
             addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
             addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction("android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED")
             addAction("android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED")
@@ -455,6 +473,10 @@ class IslandOverlayService : Service() {
             registerReceiver(powerReceiver, powerFilter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(powerReceiver, powerFilter)
+        }
+        // Started while already locked (e.g. after an update): no SCREEN_OFF is coming to hide content
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
+            IslandStateManager.onScreenOff(lockScreenHidesContent())
         }
     }
 
@@ -646,8 +668,9 @@ class IslandOverlayService : Service() {
                     IslandStateManager.activeMedia,
                     IslandStateManager.activeNotification,
                     IslandStateManager.activeProgress,
-                    IslandStateManager.screenRecordingState
-                ) { _, _, _, _ -> Unit },
+                    IslandStateManager.screenRecordingState,
+                    IslandStateManager.isPopInActive
+                ) { _, _, _, _, _ -> Unit },
                 kotlinx.coroutines.flow.combine(
                     IslandStateManager.activeCharging,
                     IslandStateManager.isUnlocked,
@@ -688,6 +711,12 @@ class IslandOverlayService : Service() {
                 ) {
                     appliedStatusIcons = statusIcons
                 }
+                val replacePopups = settings.isEnabled && settings.replaceSystemPopups && settings.showNotifications
+                if (replacePopups != systemPopupsReplaced &&
+                    ShizukuHelper.setSystemHeadsUpEnabled(this@IslandOverlayService, !replacePopups)
+                ) {
+                    systemPopupsReplaced = replacePopups
+                }
                 if (!settings.isEnabled) {
                     removeOverlay()
                 } else if (composeView == null) {
@@ -700,6 +729,7 @@ class IslandOverlayService : Service() {
     }
 
     private var isCollapsing = false
+    private var popupBoundsActive = false
     private var collapseJob: kotlinx.coroutines.Job? = null
     private var wasExpanded = false
 
@@ -812,8 +842,36 @@ class IslandOverlayService : Service() {
                 currentSettings.widthDp + 80f
             }
 
+            // A new notification's popup blooms out of the pill and needs a bigger touchable window
+            val isPopupOut = IslandStateManager.isPopInActive.value && currentSettings.showNotifications &&
+                    IslandStateManager.isNotificationActive && !isCharging && !isUnlock && !isBluetooth && !isRingerMode
+
             fun applyCompactBounds() {
                 collapseJob?.cancel()
+                if (isPopupOut) {
+                    popupBoundsActive = true
+                    val popupWidthDp = resources.configuration.screenWidthDp * currentSettings.popupWidthPercent / 100f
+                    applyLayoutParams(
+                        view = view,
+                        params = params,
+                        width = ((maxOf(totalWidthDp, popupWidthDp + 24f) + 2f * kotlin.math.abs(currentSettings.horizontalOffsetDp)) * density).toInt(),
+                        height = ((currentSettings.topOffsetDp + currentSettings.heightDp + NOTIFICATION_POPUP_BODY_HEIGHT.value + 12) * density).toInt(),
+                        x = 0,
+                        y = 0,
+                        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                        flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                    )
+                    return
+                }
+                if (popupBoundsActive) {
+                    // Let the popup finish shrinking back into the pill before the window clips it
+                    popupBoundsActive = false
+                    collapseJob = serviceScope.launch {
+                        kotlinx.coroutines.delay(400)
+                        updateWindowState(IslandStateManager.isExpanded.value)
+                    }
+                    return
+                }
                 if (shouldShowCompact) {
                     // An idle pill passes touches through, unless tapping it reveals the hidden status icons
                     val tapShowsStatusIcons = currentSettings.hideStatusIcons && currentSettings.hiddenStatusIcons.isNotEmpty()
@@ -909,6 +967,9 @@ class IslandOverlayService : Service() {
         persistentTelemetryManager = null
         if (appliedStatusIcons.isNotEmpty()) {
             ShizukuHelper.applyHiddenStatusIcons(this, emptySet())
+        }
+        if (systemPopupsReplaced) {
+            ShizukuHelper.setSystemHeadsUpEnabled(this, true)
         }
         runCatching { unregisterReceiver(powerReceiver) }
         torchCallback?.let { cb ->

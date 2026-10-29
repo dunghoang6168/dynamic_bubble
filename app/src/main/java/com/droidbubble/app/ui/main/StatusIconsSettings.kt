@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -47,6 +48,53 @@ private val STATUS_ICON_LABELS = mapOf(
     "vpn" to "VPN",
     "battery" to "Battery"
 )
+
+@Composable
+fun ReplaceSystemPopupsItem(
+    settings: IslandSettings,
+    onUpdateSettings: ((IslandSettings) -> IslandSettings) -> Unit,
+    position: GroupPosition = GroupPosition.MIDDLE
+) {
+    val context = LocalContext.current
+    var hasPermission by remember { mutableStateOf(ShizukuHelper.hasWriteSecureSettings(context)) }
+    LifecycleResumeEffect(Unit) {
+        hasPermission = ShizukuHelper.hasWriteSecureSettings(context)
+        onPauseOrDispose { }
+    }
+    val active = settings.replaceSystemPopups && hasPermission
+
+    SettingsCardItem(position = position, isActive = active) {
+        ListItem(
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            headlineContent = { Text("Pop-ups Shown by Island", fontWeight = FontWeight.SemiBold) },
+            supportingContent = {
+                Text(
+                    when {
+                        !hasPermission -> "Needs WRITE_SECURE_SETTINGS; grant it from Move Status Icons Into Island in Appearance."
+                        active -> "Android's own pop-ups are off. Apps turned on below pop up on the island; incoming calls always do."
+                        else -> "Android is showing its own pop-ups, so apps turned on below pop up twice."
+                    }
+                )
+            },
+            leadingContent = {
+                Icon(Icons.Default.NotificationsPaused, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            },
+            trailingContent = {
+                Switch(
+                    checked = active,
+                    enabled = hasPermission,
+                    onCheckedChange = { enabled ->
+                        if (!enabled) {
+                            // Restore right away; the overlay service may not be running to do it
+                            ShizukuHelper.setSystemHeadsUpEnabled(context, true)
+                        }
+                        onUpdateSettings { it.copy(replaceSystemPopups = enabled) }
+                    }
+                )
+            }
+        )
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

@@ -45,13 +45,20 @@ data class NotificationInfo(
     val title: String,
     val text: String,
     val iconBitmap: Bitmap? = null,
+    val appIcon: Bitmap? = null,
+    // Messaging apps: who wrote the latest message (null for 1:1 chats or plain notifications)
+    val sender: String? = null,
+    // Picture attached to the latest message, when the app lets us read it
+    val image: Bitmap? = null,
     val contentIntent: PendingIntent? = null,
     val actions: List<NotificationAction> = emptyList(),
     val timestamp: Long = System.currentTimeMillis(),
     val progress: Int = -1,
     val maxProgress: Int = 0,
     val isIndeterminate: Boolean = false,
-    val isOngoing: Boolean = false
+    val isOngoing: Boolean = false,
+    // A ringing incoming call: opens the card straight away with its answer / decline actions
+    val isCall: Boolean = false
 ) {
     val hasProgress: Boolean
         get() = maxProgress > 0 || isIndeterminate || (progress >= 0 && maxProgress > 0)

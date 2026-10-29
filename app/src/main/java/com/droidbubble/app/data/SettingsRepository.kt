@@ -61,6 +61,8 @@ class SettingsRepository(private val context: Context) {
         val SPLIT_STIFFNESS = floatPreferencesKey("split_stiffness")
         val FEATURE_PRIORITIES = stringPreferencesKey("feature_priorities")
         val HIDE_STATUS_ICONS = booleanPreferencesKey("hide_status_icons")
+        val POPUP_WIDTH_PERCENT = intPreferencesKey("popup_width_percent")
+        val REPLACE_SYSTEM_POPUPS = booleanPreferencesKey("replace_system_popups")
         val HIDDEN_STATUS_ICONS = stringSetPreferencesKey("hidden_status_icons")
     }
 
@@ -122,6 +124,8 @@ class SettingsRepository(private val context: Context) {
                     list + DEFAULT_FEATURE_PRIORITIES.filter { it !in set }
                 } ?: DEFAULT_FEATURE_PRIORITIES,
             hideStatusIcons = preferences[PreferencesKeys.HIDE_STATUS_ICONS] ?: false,
+            popupWidthPercent = preferences[PreferencesKeys.POPUP_WIDTH_PERCENT] ?: 65,
+            replaceSystemPopups = preferences[PreferencesKeys.REPLACE_SYSTEM_POPUPS] ?: true,
             hiddenStatusIcons = preferences[PreferencesKeys.HIDDEN_STATUS_ICONS] ?: DEFAULT_HIDDEN_STATUS_ICONS
         )
     }
@@ -172,6 +176,8 @@ class SettingsRepository(private val context: Context) {
             preferences[PreferencesKeys.SPLIT_STIFFNESS] = newSettings.splitStiffness
             preferences[PreferencesKeys.FEATURE_PRIORITIES] = newSettings.featurePriorities.joinToString(",")
             preferences[PreferencesKeys.HIDE_STATUS_ICONS] = newSettings.hideStatusIcons
+            preferences[PreferencesKeys.POPUP_WIDTH_PERCENT] = newSettings.popupWidthPercent
+            preferences[PreferencesKeys.REPLACE_SYSTEM_POPUPS] = newSettings.replaceSystemPopups
             preferences[PreferencesKeys.HIDDEN_STATUS_ICONS] = newSettings.hiddenStatusIcons
         }
     }
