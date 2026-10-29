@@ -57,6 +57,7 @@ import android.hardware.camera2.CameraManager
 import android.os.Handler
 import android.os.Looper
 import com.droidbubble.app.model.IslandSettings
+import com.droidbubble.app.util.ShizukuHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -111,6 +112,8 @@ class IslandOverlayService : Service() {
 
     private val lifecycleOwner = CustomLifecycleOwner()
     private var currentSettings = IslandSettings()
+    // Status bar icons this service last hid via icon_blacklist
+    private var appliedStatusIcons: Set<String> = emptySet()
 
     private var cameraManager: CameraManager? = null
     private var torchCameraId: String? = null
@@ -684,6 +687,12 @@ class IslandOverlayService : Service() {
                 persistentTelemetryManager?.updateSettings(settings)
                 IslandStateManager.dismissMediaOnPause = settings.dismissMediaOnPause
                 IslandStateManager.autoDismissNotifications = settings.autoDismissNotifications
+                val statusIcons = if (settings.isEnabled && settings.hideStatusIcons) settings.hiddenStatusIcons else emptySet()
+                if (statusIcons != appliedStatusIcons &&
+                    ShizukuHelper.applyHiddenStatusIcons(this@IslandOverlayService, statusIcons)
+                ) {
+                    appliedStatusIcons = statusIcons
+                }
                 if (!settings.isEnabled) {
                     removeOverlay()
                 } else if (composeView == null) {
@@ -811,7 +820,9 @@ class IslandOverlayService : Service() {
             fun applyCompactBounds() {
                 collapseJob?.cancel()
                 if (shouldShowCompact) {
-                    val targetFlags = if (isOccupied || hasPersistentWidgets) {
+                    // An idle pill passes touches through, unless tapping it reveals the hidden status icons
+                    val tapShowsStatusIcons = currentSettings.hideStatusIcons && currentSettings.hiddenStatusIcons.isNotEmpty()
+                    val targetFlags = if (isOccupied || hasPersistentWidgets || tapShowsStatusIcons) {
                         params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
                     } else {
                         params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -901,6 +912,9 @@ class IslandOverlayService : Service() {
         runCatching { unregisterReceiver(debugReceiver) }
         persistentTelemetryManager?.stop()
         persistentTelemetryManager = null
+        if (appliedStatusIcons.isNotEmpty()) {
+            ShizukuHelper.applyHiddenStatusIcons(this, emptySet())
+        }
         runCatching { unregisterReceiver(powerReceiver) }
         torchCallback?.let { cb ->
             runCatching { cameraManager?.unregisterTorchCallback(cb) }

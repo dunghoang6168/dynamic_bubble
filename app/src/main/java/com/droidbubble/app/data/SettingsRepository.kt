@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.droidbubble.app.model.IslandSettings
 import com.droidbubble.app.model.DEFAULT_FEATURE_PRIORITIES
+import com.droidbubble.app.model.DEFAULT_HIDDEN_STATUS_ICONS
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -58,6 +59,8 @@ class SettingsRepository(private val context: Context) {
         val SPLIT_DAMPING = floatPreferencesKey("split_damping")
         val SPLIT_STIFFNESS = floatPreferencesKey("split_stiffness")
         val FEATURE_PRIORITIES = stringPreferencesKey("feature_priorities")
+        val HIDE_STATUS_ICONS = booleanPreferencesKey("hide_status_icons")
+        val HIDDEN_STATUS_ICONS = stringSetPreferencesKey("hidden_status_icons")
     }
 
     val settingsFlow: Flow<IslandSettings> = context.dataStore.data.map { preferences ->
@@ -114,7 +117,9 @@ class SettingsRepository(private val context: Context) {
                 ?.let { list ->
                     val set = list.toSet()
                     list + DEFAULT_FEATURE_PRIORITIES.filter { it !in set }
-                } ?: DEFAULT_FEATURE_PRIORITIES
+                } ?: DEFAULT_FEATURE_PRIORITIES,
+            hideStatusIcons = preferences[PreferencesKeys.HIDE_STATUS_ICONS] ?: false,
+            hiddenStatusIcons = preferences[PreferencesKeys.HIDDEN_STATUS_ICONS] ?: DEFAULT_HIDDEN_STATUS_ICONS
         )
     }
 
@@ -173,7 +178,9 @@ class SettingsRepository(private val context: Context) {
                     ?.let { list ->
                         val set = list.toSet()
                         list + DEFAULT_FEATURE_PRIORITIES.filter { it !in set }
-                    } ?: DEFAULT_FEATURE_PRIORITIES
+                    } ?: DEFAULT_FEATURE_PRIORITIES,
+                hideStatusIcons = preferences[PreferencesKeys.HIDE_STATUS_ICONS] ?: false,
+                hiddenStatusIcons = preferences[PreferencesKeys.HIDDEN_STATUS_ICONS] ?: DEFAULT_HIDDEN_STATUS_ICONS
             )
 
             val newSettings = update(current)
@@ -217,6 +224,8 @@ class SettingsRepository(private val context: Context) {
             preferences[PreferencesKeys.SPLIT_DAMPING] = newSettings.splitDamping
             preferences[PreferencesKeys.SPLIT_STIFFNESS] = newSettings.splitStiffness
             preferences[PreferencesKeys.FEATURE_PRIORITIES] = newSettings.featurePriorities.joinToString(",")
+            preferences[PreferencesKeys.HIDE_STATUS_ICONS] = newSettings.hideStatusIcons
+            preferences[PreferencesKeys.HIDDEN_STATUS_ICONS] = newSettings.hiddenStatusIcons
         }
     }
 }

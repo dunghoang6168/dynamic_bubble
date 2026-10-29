@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import com.droidbubble.app.model.STATUS_ICON_SLOTS
 import rikka.shizuku.Shizuku
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -21,7 +22,10 @@ object ShizukuHelper {
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private const val ICON_BLACKLIST_FULL = "wifi,cell,mobile,phone_signal,phone_evdo_signal,data_connection,no_calling,volte,ims_volte,wifi_calling,vowifi,battery,battery_saver,power_saver,clock,time,volume,mute,vibrate,bluetooth,bt,bluetooth_connected,bluetooth_battery,bt_battery,bt_connected,hearing_aid,bluetooth_hearing_aid,headset,headphone,earphone,earphones,alarm_clock,alarm,zen,dnd,do_not_disturb,managed_profile,nfc,nfc_on,cast,hotspot,vpn,airplane,location,gps,camera,microphone,screen_record,connected_display,sync_active,sync_failing,rotate,eye_protect,notification,notifications,notification_icons,notification_badge,notification_badges,badges,more_notifications,app_badge,app_icon,new_message,message,mail,sms"
+    private const val ICON_BLACKLIST = "icon_blacklist"
+    // Extra SystemUI slots behind one offered slot (Android 14+ moved the silent icon from "volume" to "mute")
+    private val LINKED_SLOTS = mapOf("volume" to listOf("mute"))
+    private val MANAGED_SLOTS = STATUS_ICON_SLOTS + LINKED_SLOTS.values.flatten()
 
     fun isShizukuInstalled(context: Context): Boolean {
         return try {
@@ -79,87 +83,55 @@ object ShizukuHelper {
         }
     }
 
-    fun setSystemStatusBarIconsHidden(context: Context, hidden: Boolean, onResult: ((Boolean) -> Unit)? = null) {
-        executor.execute {
-            var success = false
-
-            // Try direct Settings modification if permission is granted
-            if (hasWriteSecureSettings(context)) {
-                try {
-                    if (hidden) {
-                        Settings.Secure.putString(context.contentResolver, "icon_blacklist", ICON_BLACKLIST_FULL)
-                        Settings.Global.putString(context.contentResolver, "policy_control", "immersive.status=*")
-                        Settings.Secure.putString(context.contentResolver, "status_bar_show_notification_icon", "0")
-                        Settings.Secure.putString(context.contentResolver, "show_notification_icon", "0")
-                        Settings.Secure.putString(context.contentResolver, "notification_badging", "0")
-                        Settings.Secure.putString(context.contentResolver, "status_bar_show_badges", "0")
-                        Settings.System.putString(context.contentResolver, "status_bar_show_notification_icon", "0")
-                        Settings.System.putString(context.contentResolver, "show_notification_icon", "0")
-                    } else {
-                        Settings.Secure.putString(context.contentResolver, "icon_blacklist", "")
-                        Settings.Global.putString(context.contentResolver, "policy_control", "")
-                        Settings.Secure.putString(context.contentResolver, "status_bar_show_notification_icon", "1")
-                        Settings.Secure.putString(context.contentResolver, "show_notification_icon", "1")
-                        Settings.Secure.putString(context.contentResolver, "notification_badging", "1")
-                        Settings.Secure.putString(context.contentResolver, "status_bar_show_badges", "1")
-                        Settings.System.putString(context.contentResolver, "status_bar_show_notification_icon", "1")
-                        Settings.System.putString(context.contentResolver, "show_notification_icon", "1")
-                    }
-                    success = true
-                } catch (e: Throwable) {
-                    Log.w(TAG, "Direct Settings write failed, falling back to shell", e)
-                }
-            }
-
-            // Also run Shizuku shell commands if available
-            val commands = if (hidden) {
-                listOf(
-                    "settings put secure icon_blacklist \"$ICON_BLACKLIST_FULL\"",
-                    "settings put global policy_control \"immersive.status=*\"",
-                    "settings put secure status_bar_show_notification_icon 0",
-                    "settings put secure show_notification_icon 0",
-                    "settings put secure notification_badging 0",
-                    "settings put secure status_bar_show_badges 0",
-                    "settings put system status_bar_show_notification_icon 0",
-                    "settings put system show_notification_icon 0"
-                )
-            } else {
-                listOf(
-                    "settings delete secure icon_blacklist",
-                    "settings put secure icon_blacklist \"\"",
-                    "settings delete global policy_control",
-                    "settings put global policy_control \"\"",
-                    "settings delete secure status_bar_show_notification_icon",
-                    "settings put secure status_bar_show_notification_icon 1",
-                    "settings delete secure show_notification_icon",
-                    "settings put secure show_notification_icon 1",
-                    "settings delete secure notification_badging",
-                    "settings put secure notification_badging 1",
-                    "settings delete secure status_bar_show_badges",
-                    "settings put secure status_bar_show_badges 1",
-                    "settings delete system status_bar_show_notification_icon",
-                    "settings put system status_bar_show_notification_icon 1",
-                    "settings delete system show_notification_icon",
-                    "settings put system show_notification_icon 1"
-                )
-            }
-
-            if (isShizukuAvailable() && hasShizukuPermission()) {
-                for (cmd in commands) {
-                    runShellCommand(cmd)
-                }
-                success = true
-            }
-
-            try {
-                for (cmd in commands) {
-                    val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-                    p.waitFor()
-                }
-            } catch (_: Throwable) {}
-
-            mainHandler.post { onResult?.invoke(success) }
+    /**
+     * Requests Shizuku access if needed, then grants WRITE_SECURE_SETTINGS to this app.
+     */
+    fun grantWriteSecureSettingsViaShizuku(context: Context, onResult: (Boolean) -> Unit) {
+        if (!isShizukuAvailable() || Shizuku.isPreV11()) {
+            onResult(false)
+            return
         }
+        if (hasShizukuPermission()) {
+            grantWriteSecureSettings(context.packageName, onResult)
+            return
+        }
+        val listener = object : Shizuku.OnRequestPermissionResultListener {
+            override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
+                if (requestCode != SHIZUKU_PERMISSION_REQUEST_CODE) return
+                Shizuku.removeRequestPermissionResultListener(this)
+                if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                    grantWriteSecureSettings(context.packageName, onResult)
+                } else {
+                    onResult(false)
+                }
+            }
+        }
+        Shizuku.addRequestPermissionResultListener(listener, mainHandler)
+        if (!requestShizukuPermission()) {
+            Shizuku.removeRequestPermissionResultListener(listener)
+            onResult(false)
+        }
+    }
+
+    /**
+     * Hides exactly [slots] among [STATUS_ICON_SLOTS] in SystemUI's icon_blacklist; an empty set restores them.
+     * Slots outside [STATUS_ICON_SLOTS] already in the list are kept.
+     */
+    fun applyHiddenStatusIcons(context: Context, slots: Set<String>): Boolean {
+        if (!hasWriteSecureSettings(context)) return false
+        val resolver = context.contentResolver
+        // Hidden keys are not readable for apps targeting S+ on most builds; then we start from an empty list.
+        // ponytail: an offered slot hidden by another tool gets unhidden on restore; persist the original list if that matters
+        val current = runCatching { Settings.Secure.getString(resolver, ICON_BLACKLIST) }.getOrNull()
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+        val wanted = slots.filter { it in STATUS_ICON_SLOTS }.flatMap { listOf(it) + LINKED_SLOTS[it].orEmpty() }
+        val updated = (current.filter { it !in MANAGED_SLOTS } + wanted).distinct()
+        return runCatching {
+            Settings.Secure.putString(resolver, ICON_BLACKLIST, updated.joinToString(","))
+        }.onFailure { Log.e(TAG, "Failed to write icon_blacklist", it) }.getOrDefault(false)
     }
 
     private fun runShellCommand(command: String): Boolean {

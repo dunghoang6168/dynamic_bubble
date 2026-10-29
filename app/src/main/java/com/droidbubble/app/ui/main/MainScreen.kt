@@ -1921,6 +1921,10 @@ fun AppearancePage(
             }
 
             item {
+                HideStatusIconsSection(settings = settings, onUpdateSettings = onUpdateSettings)
+            }
+
+            item {
                 AnimationCurveEditor(settings = settings, onUpdateSettings = onUpdateSettings)
             }
         }

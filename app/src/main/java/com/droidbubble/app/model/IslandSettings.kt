@@ -8,6 +8,21 @@ val DEFAULT_FEATURE_PRIORITIES = listOf(
     "FLASHLIGHT"
 )
 
+// SystemUI icon_blacklist slot names that the island can show in place of the status bar icon
+val STATUS_ICON_SLOTS = listOf(
+    "alarm_clock",
+    "bluetooth",
+    "volume",
+    "zen",
+    "wifi",
+    "mobile",
+    "airplane",
+    "vpn",
+    "battery"
+)
+
+val DEFAULT_HIDDEN_STATUS_ICONS = setOf("alarm_clock", "bluetooth", "volume", "zen")
+
 data class IslandSettings(
     val isEnabled: Boolean = true,
     val widthDp: Int = 180,
@@ -46,5 +61,7 @@ data class IslandSettings(
     val appearStiffness: Float = 280f,
     val splitDamping: Float = 0.63f,
     val splitStiffness: Float = 320f,
-    val featurePriorities: List<String> = DEFAULT_FEATURE_PRIORITIES
+    val featurePriorities: List<String> = DEFAULT_FEATURE_PRIORITIES,
+    val hideStatusIcons: Boolean = false,
+    val hiddenStatusIcons: Set<String> = DEFAULT_HIDDEN_STATUS_ICONS
 )

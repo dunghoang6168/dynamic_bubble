@@ -405,6 +405,8 @@ fun IslandOverlayRoot(
     val isWeather = allowInOrientation && settings.showWeather
     val isNetworkSpeed = allowInOrientation && settings.showNetworkSpeed
     val hasPersistent = isFps || isWeather || isNetworkSpeed
+    // Status bar icons hidden via icon_blacklist are shown above the expanded cards instead
+    val showStatusStrip = settings.hideStatusIcons && settings.hiddenStatusIcons.isNotEmpty()
 
     val isOccupied = allowInOrientation && (isRecording || isNotification || isMedia || isProgress || isCharging || isUnlock || isBluetooth || isFlashlight || isRingerMode || hasPersistent)
 
@@ -966,7 +968,7 @@ fun IslandOverlayRoot(
 
     LaunchedEffect(isExpanded, isOccupied, primaryPriority) {
         if (isExpanded) {
-            if (!isOccupied || primaryPriority == IslandPriority.IDLE) {
+            if ((!isOccupied || primaryPriority == IslandPriority.IDLE) && !showStatusStrip) {
                 IslandStateManager.collapse()
             }
         }
@@ -1032,8 +1034,22 @@ fun IslandOverlayRoot(
                         }
                     } else Modifier
                 ) {
-                    // Card 1: Primary Expanded Card
-                    if (animatedCard1Width > 1.dp && (expandProgress > 0.001f || isExpanded)) {
+                    if (showStatusStrip && animatedCard1Width > 1.dp && (expandProgress > 0.001f || isExpanded)) {
+                        SystemStatusStrip(
+                            slots = settings.hiddenStatusIcons,
+                            modifier = Modifier
+                                .width(animatedCard1Width)
+                                .height(36.dp)
+                                .graphicsLayer { alpha = cardContainerAlpha }
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.Black)
+                                .padding(horizontal = 16.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // Card 1: Primary Expanded Card (nothing to show when idle; the status strip stands alone)
+                    if (animatedCard1Width > 1.dp && (expandProgress > 0.001f || isExpanded) && primaryPriority != IslandPriority.IDLE) {
                         Box(
                             modifier = Modifier
                                 .offset { IntOffset(animatedCard1OffsetX.roundToInt(), 0) }
@@ -1554,7 +1570,7 @@ fun IslandOverlayRoot(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {
-                                if (!isExpanded && (isOccupied || hasPersistent) && !isUnlock && !isBluetooth && !isRingerMode) {
+                                if (!isExpanded && (isOccupied || hasPersistent || showStatusStrip) && !isUnlock && !isBluetooth && !isRingerMode) {
                                     triggerHaptic()
                                     IslandStateManager.expand(primaryPriority)
                                 } else if (!isExpanded && !isOccupied && !hasPersistent && settings.alwaysShowPill) {
